@@ -23,15 +23,15 @@ git push -u origin pylinx171
 
 | Secret | 值 |
 |---|---|
-| `PYLINX_KEYSTORE_B64` | 原测试签名文件的 Base64，按下面的命令复制 |
+| `PYLINX_KEYSTORE_B64` | 原测试签名文件的 Base64，用下面的命令直接设置 |
 | `PYLINX_KEYSTORE_PASSWORD` | 原 keystore 密码，本机标准 Android debug keystore 默认为 `android` |
 | `PYLINX_KEY_PASSWORD` | 原私钥密码，标准 debug keystore 默认为 `android` |
 | `PYLINX_KEY_ALIAS` | 原私钥别名，标准 debug keystore 为 `androiddebugkey` |
 
-在原来打包的 Mac 上将现有 keystore 复制到剪贴板，然后直接粘贴到 GitHub Secret。
+在原来打包的 Mac 上运行以下命令，将现有 keystore 直接写入 GitHub Secret。
 
 ```sh
-base64 < "$HOME/.android/debug.keystore" | tr -d '\n' | pbcopy
+base64 < "$HOME/.android/debug.keystore" | tr -d '\n' | gh secret set PYLINX_KEYSTORE_B64 --repo Pylinx171/MAA-Meow
 ```
 
 工作流在独立的签名任务读取这些 Secrets，并对照当前测试版的公开证书 SHA-256 指纹 `7e70e6cf65424494f8dcbf8a37b51f20634ceceb32b7c1a134123af3394a0c11`。如果想换成新的发布签名，需要先处理手机上旧测试包的数据迁移。 [Android 覆盖更新条件](https://developer.android.com/google/play/app-updates)
