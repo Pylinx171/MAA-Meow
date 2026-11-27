@@ -1,6 +1,12 @@
 # Pylinx171 自动同步与发布
 
-日常调度在北京时间 09:19 运行。工作流从 Aliothmoon/MAA-Meow 选择最新正式版本标签，合并进临时分支。Android 显示版本跟随上游标签，例如上游 `v0.28.2` 对应 `0.28.2`。发布使用独立且递增的 Android `versionCode`。现有测试版的 `versionCode` 为 1010，首个发布候选从 1011 开始。失败重试可能留下版本号间隔。
+日常调度在北京时间 09:19 运行。工作流从 Aliothmoon/MAA-Meow 选择最新正式版本标签，合并进临时分支，自动审查通过后才构建。Android 显示版本跟随上游标签，例如上游 `v0.28.2` 对应 `0.28.2`。发布使用独立且递增的 Android `versionCode`。失败重试可能留下版本号间隔。
+
+## 自动审查与分支保护
+
+`pylinx/automated-review` 是 `pylinx171` 的必需检查。定时更新检查候选 App 提交与 MaaCore 版本差异，限制构建入口、发布配置、可执行文件和高风险模式的变更，并用固定版本的 Gitleaks 扫描新增内容。通过后才把候选提交、审核后的构建计划和固定的 MaaCore 提交交给无签名 Secrets 的构建任务。发布任务会独立核对构建计划、APK 签名和制品哈希。审查失败时会停止并发送邮件。
+
+针对 `pylinx171` 的 PR 也会自动检查。审查任务从目标分支加载工具，只读取 PR 提交中的 Git 对象。推送新提交后会重新检查。外部 PR 仍需要有人决定是否合并，定时任务只自动接收指定上游的正式版本。自动检查只能发现其规则覆盖的问题。
 
 ## GitHub 一次性配置
 
@@ -54,7 +60,7 @@ base64 < "$HOME/.android/debug.keystore" | tr -d '\n' | gh secret set PYLINX_KEY
 3. 再运行一次，勾选 `publish`。确认 GitHub Release 有签名 APK 和 MaaResource ZIP，[静态更新清单](https://raw.githubusercontent.com/Pylinx171/MAA-Meow/pylinx-updates/update.json) 指向该版本。
 4. 手动安装第一个 fork Release 的 APK 覆盖当前测试版。以后在首页检查 App 或 MAA 资源更新，即使用同一份 fork 清单。
 
-如遇代码冲突，Actions 和邮件会标出文件。将日志中的上游 tag 合并到 `pylinx171`，修好后重新运行构建。出现 MaaCore 校验失败时，按 `stage.py` 的错误调整对应接入点。自动流程从被同步的上游提交记录识别 MaaCore 版本。如果上游改变了版本声明方式，手动运行时可填写 `maa_core`，例如 `v6.23.2`。
+如遇代码冲突或自动审查失败，Actions 和邮件会标出对应文件。普通修复可提交到分支并向 `pylinx171` 发 PR，自动检查通过后合并并重跑发布。对安全审查自身、构建入口或签名发布配置的维护需要仓库所有者明确处理分支保护。出现 MaaCore 接入校验失败时，按 `stage.py` 的错误调整对应接入点。自动流程从被同步的上游提交记录识别 MaaCore 版本。如果上游改变了版本声明方式，手动运行时可填写 `maa_core`，例如 `v6.23.2`。
 
 ## 产物和测试范围
 

@@ -3,6 +3,9 @@ name: Pylinx171 auto release
 on:
   schedule:
     - cron: '19 1 * * *'
+  pull_request_target:
+    branches: [pylinx171]
+    types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
     inputs:
       publish:
@@ -24,16 +27,166 @@ permissions:
   contents: read
 
 concurrency:
-  group: pylinx171-release
+  group: pylinx171-release-${{ github.event.pull_request.number || 'publish' }}
   cancel-in-progress: false
 
 jobs:
+  review:
+    if: github.repository == 'Pylinx171/MAA-Meow' && github.ref == 'refs/heads/pylinx171' && !inputs.test_email
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      core: ${{ steps.plan.outputs.core }}
+      version_name: ${{ steps.plan.outputs.version_name }}
+      version_code: ${{ steps.plan.outputs.version_code }}
+      reviewed_commit: ${{ steps.inspect.outputs.head }}
+      warned: ${{ steps.summary.outputs.warned }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare trusted review tools
+        run: |
+          reviewed="$RUNNER_TEMP/pylinx-reviewed"
+          review_tools="$RUNNER_TEMP/pylinx-review-tools"
+          mkdir -p "$reviewed" "$review_tools"
+          cp extensions/pylinx-release/{pipeline,security_review}.py "$review_tools"
+          {
+            echo "REVIEWED=$reviewed"
+            echo "REVIEW_TOOLS=$review_tools"
+            echo "PYLINX_ALERT_FILE=$RUNNER_TEMP/pylinx-alerts.txt"
+          } >> "$GITHUB_ENV"
+
+      - name: Resolve upstream and merge a candidate
+        id: plan
+        if: github.event_name != 'pull_request_target'
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          MAA_CORE: ${{ inputs.maa_core }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          args=(--plan "$REVIEWED/plan.json")
+          if [[ -n "$UPSTREAM_TAG" ]]; then args+=(--upstream-tag "$UPSTREAM_TAG"); fi
+          if [[ -n "$MAA_CORE" ]]; then args+=(--maa-core "$MAA_CORE"); fi
+          if [[ "$MANUAL" == "true" ]]; then args+=(--force); fi
+          python3 "$REVIEW_TOOLS/pipeline.py" prepare "${args[@]}"
+
+      - name: Install the verified credential scanner
+        if: github.event_name == 'pull_request_target' || steps.plan.outputs.build == 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz' | sha256sum --check
+          tar -xzf gitleaks.tar.gz -C "$REVIEW_TOOLS" gitleaks
+
+      - name: Automated code and credential review
+        id: inspect
+        if: github.event_name == 'pull_request_target' || steps.plan.outputs.build == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ -n "$PR_NUMBER" ]]; then
+            [[ "$PR_NUMBER" =~ ^[0-9]+$ && "$PR_HEAD" =~ ^[0-9a-f]{40}$ ]]
+            # Read Git objects only. Do not check out PR files or load their scripts/configuration.
+            git fetch --no-tags origin "refs/pull/$PR_NUMBER/head"
+            test "$(git rev-parse FETCH_HEAD)" = "$PR_HEAD"
+            echo "head=$PR_HEAD" >> "$GITHUB_OUTPUT"
+            python3 "$REVIEW_TOOLS/security_review.py" --head "$PR_HEAD" --gitleaks "$REVIEW_TOOLS/gitleaks"
+          else
+            python3 "$REVIEW_TOOLS/security_review.py" --plan "$REVIEWED/plan.json" --gitleaks "$REVIEW_TOOLS/gitleaks"
+            head=$(jq -er .sourceCommit "$REVIEWED/plan.json")
+            if [[ "$head" != "$GITHUB_SHA" ]]; then
+              git bundle create "$REVIEWED/source.bundle" pylinx-release-candidate "^$GITHUB_SHA"
+            fi
+            echo "head=$head" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report the PR's required review status
+        if: always() && github.event_name == 'pull_request_target' && steps.inspect.outputs.head != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_HEAD: ${{ steps.inspect.outputs.head }}
+          INSPECTION: ${{ steps.inspect.outcome }}
+        run: |
+          [[ "$REVIEW_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          state=failure
+          if [[ "$INSPECTION" == success ]]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$REVIEW_HEAD" \
+            -f state="$state" -f context='pylinx/automated-review' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --silent
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: steps.plan.outputs.build == 'true'
+        with:
+          name: pylinx-reviewed-source
+          path: ${{ env.REVIEWED }}
+          if-no-files-found: error
+
+      - name: Record review findings
+        id: summary
+        if: always()
+        run: |
+          if [[ -s "$PYLINX_ALERT_FILE" ]]; then
+            echo 'warned=true' >> "$GITHUB_OUTPUT"
+            cat "$PYLINX_ALERT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always() && steps.summary.outputs.warned == 'true'
+        with:
+          name: pylinx-review-alerts
+          path: ${{ env.PYLINX_ALERT_FILE }}
+
+  record:
+    needs: review
+    if: needs.review.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: pylinx-reviewed-source
+          path: ${{ runner.temp }}/pylinx-reviewed
+
+      - name: Record the reviewed candidate on GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_HEAD: ${{ needs.review.outputs.reviewed_commit }}
+        run: |
+          [[ "$REVIEW_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$REVIEW_HEAD" != "$GITHUB_SHA" ]]; then
+            git fetch --no-tags "$RUNNER_TEMP/pylinx-reviewed/source.bundle" refs/heads/pylinx-release-candidate
+            test "$(git rev-parse FETCH_HEAD)" = "$REVIEW_HEAD"
+            git push origin "$REVIEW_HEAD:refs/heads/pylinx-review/$REVIEW_HEAD"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$REVIEW_HEAD" \
+            -f state=success -f context='pylinx/automated-review' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --silent
+
   build:
-    if: github.repository == 'Pylinx171/MAA-Meow' && !inputs.test_email
+    needs: [review, record]
+    if: needs.review.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
-      built: ${{ steps.plan.outputs.build }}
       warned: ${{ steps.summary.outputs.warned }}
     steps:
       - name: Set temporary paths
@@ -45,50 +198,53 @@ jobs:
             echo "OUT=$RUNNER_TEMP/pylinx-build"
           } >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: pylinx171
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
-      - name: Resolve upstream and merge a candidate
-        id: plan
-        env:
-          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
-          MAA_CORE: ${{ inputs.maa_core }}
-          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          args=(--plan "$PLAN")
-          if [[ -n "$UPSTREAM_TAG" ]]; then args+=(--upstream-tag "$UPSTREAM_TAG"); fi
-          if [[ -n "$MAA_CORE" ]]; then args+=(--maa-core "$MAA_CORE"); fi
-          if [[ "$MANUAL" == "true" ]]; then args+=(--force); fi
-          python3 extensions/pylinx-release/pipeline.py prepare "${args[@]}"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: pylinx-reviewed-source
+          path: ${{ runner.temp }}/pylinx-reviewed
 
-      - uses: actions/setup-java@v5
-        if: steps.plan.outputs.build == 'true'
+      - name: Check out the reviewed source
+        env:
+          REVIEW_HEAD: ${{ needs.review.outputs.reviewed_commit }}
+        run: |
+          reviewed="$RUNNER_TEMP/pylinx-reviewed"
+          cp "$reviewed/plan.json" "$PLAN"
+          test "$(jq -er .baseCommit "$PLAN")" = "$GITHUB_SHA"
+          test "$(jq -er .sourceCommit "$PLAN")" = "$REVIEW_HEAD"
+          if [[ "$REVIEW_HEAD" != "$GITHUB_SHA" ]]; then
+            git fetch --no-tags "$reviewed/source.bundle" refs/heads/pylinx-release-candidate
+            test "$(git rev-parse FETCH_HEAD)" = "$REVIEW_HEAD"
+            git checkout --detach "$REVIEW_HEAD"
+          fi
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '25'
 
-      - uses: android-actions/setup-android@v4
-        if: steps.plan.outputs.build == 'true'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           packages: platform-tools
 
       - name: Install the Android build toolchain
-        if: steps.plan.outputs.build == 'true'
         run: sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
 
       - name: Check the upstream MaaCore integration points
-        if: steps.plan.outputs.build == 'true'
         env:
-          CORE: ${{ steps.plan.outputs.core }}
+          CORE: ${{ needs.review.outputs.core }}
         run: |
           git clone --depth 1 --branch "$CORE" https://github.com/MaaAssistantArknights/MaaAssistantArknights.git "$CORE_TREE"
+          test "$(git -C "$CORE_TREE" rev-parse HEAD)" = "$(jq -er .coreCommit "$PLAN")"
           git -C "$CORE_TREE" submodule update --init --depth 1 src/MaaUtils
           python3 extensions/pylinx-release/pipeline.py core-warnings --plan "$PLAN" --core-tree "$CORE_TREE"
           if ! python3 extensions/clue-reciprocity/stage.py --app-tree "$PWD" --core-tree "$CORE_TREE" --ci-checkout; then
@@ -97,9 +253,8 @@ jobs:
           fi
 
       - name: Stage and compile the custom Android MaaCore
-        if: steps.plan.outputs.build == 'true'
         env:
-          CORE: ${{ steps.plan.outputs.core }}
+          CORE: ${{ needs.review.outputs.core }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # stage.py applies the planned hooks only to this disposable runner checkout.
@@ -114,10 +269,9 @@ jobs:
             --install-core arm64-v8a "$CORE_TREE/build/bin/libMaaCore.so" --apply
 
       - name: Run the native and Android regression tests
-        if: steps.plan.outputs.build == 'true'
         env:
-          VERSION_NAME: ${{ steps.plan.outputs.version_name }}
-          VERSION_CODE: ${{ steps.plan.outputs.version_code }}
+          VERSION_NAME: ${{ needs.review.outputs.version_name }}
+          VERSION_CODE: ${{ needs.review.outputs.version_code }}
         run: |
           c++ -std=c++20 -Wall -Wextra -Werror extensions/clue-reciprocity/check_policy.cpp -o "$RUNNER_TEMP/check-policy"
           "$RUNNER_TEMP/check-policy"
@@ -128,10 +282,9 @@ jobs:
             -Ppylinx.versionName="$VERSION_NAME" -Ppylinx.versionCode="$VERSION_CODE"
 
       - name: Build and verify the fork APK and resource ZIP
-        if: steps.plan.outputs.build == 'true'
         env:
-          VERSION_NAME: ${{ steps.plan.outputs.version_name }}
-          VERSION_CODE: ${{ steps.plan.outputs.version_code }}
+          VERSION_NAME: ${{ needs.review.outputs.version_name }}
+          VERSION_CODE: ${{ needs.review.outputs.version_code }}
         run: |
           bash gradlew :app:assembleRelease -Pmaa.abi=arm64-v8a -Ppylinx.release=true \
             -Ppylinx.versionName="$VERSION_NAME" -Ppylinx.versionCode="$VERSION_CODE"
@@ -140,8 +293,7 @@ jobs:
             --resource app/src/main/assets/MaaSync/MaaResource \
             --out "$OUT" --build-tools "$ANDROID_HOME/build-tools/37.0.0"
 
-      - uses: actions/upload-artifact@v7
-        if: steps.plan.outputs.build == 'true'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pylinx-build
           path: ${{ env.OUT }}
@@ -156,40 +308,45 @@ jobs:
             cat "$PYLINX_ALERT_FILE" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always() && steps.summary.outputs.warned == 'true'
         with:
           name: pylinx-alerts
           path: ${{ env.PYLINX_ALERT_FILE }}
 
   publish:
-    if: needs.build.outputs.built == 'true' && (github.event_name == 'schedule' || inputs.publish)
-    needs: build
+    if: needs.review.outputs.build == 'true' && (github.event_name == 'schedule' || inputs.publish)
+    needs: [review, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: pylinx171
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '25'
 
-      - uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           packages: platform-tools
 
       - run: sdkmanager --install 'build-tools;37.0.0'
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: pylinx-build
           path: ${{ runner.temp }}/pylinx-build
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: pylinx-reviewed-source
+          path: ${{ runner.temp }}/pylinx-reviewed
 
       - name: Sign the tested APK
         env:
@@ -218,32 +375,45 @@ jobs:
         run: |
           python3 extensions/pylinx-release/pipeline.py publish \
             --artifacts "$RUNNER_TEMP/pylinx-build" --apk "$RUNNER_TEMP/MaaMeow-pylinx171-arm64-v8a.apk" \
+            --approved "$RUNNER_TEMP/pylinx-reviewed" \
             --build-tools "$ANDROID_HOME/build-tools/37.0.0"
 
   notify:
-    needs: [build, publish]
+    needs: [review, record, build, publish]
     if: >-
-      always() && github.repository == 'Pylinx171/MAA-Meow' &&
-      (inputs.test_email || needs.build.outputs.warned == 'true' ||
+      always() && github.repository == 'Pylinx171/MAA-Meow' && github.ref == 'refs/heads/pylinx171' &&
+      github.event_name != 'pull_request_target' &&
+      (inputs.test_email || needs.review.outputs.warned == 'true' || needs.build.outputs.warned == 'true' ||
+       needs.review.result == 'failure' || needs.record.result == 'failure' ||
        needs.build.result == 'failure' || needs.publish.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: needs.review.outputs.warned == 'true'
+        with:
+          name: pylinx-review-alerts
+          path: ${{ runner.temp }}/pylinx-mail/review
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: needs.build.outputs.warned == 'true'
         with:
           name: pylinx-alerts
-          path: ${{ runner.temp }}/pylinx-mail
+          path: ${{ runner.temp }}/pylinx-mail/build
 
       - name: Send the Gmail alert
         env:
           GMAIL_ADDRESS: ${{ secrets.PYLINX_GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.PYLINX_GMAIL_APP_PASSWORD }}
+          REVIEW_RESULT: ${{ needs.record.result == 'failure' && needs.record.result || needs.review.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           TEST_EMAIL: ${{ inputs.test_email }}
-        run: python3 extensions/pylinx-release/notify.py "$RUNNER_TEMP/pylinx-mail/pylinx-alerts.txt"
+        run: |
+          python3 extensions/pylinx-release/notify.py \
+            "$RUNNER_TEMP/pylinx-mail/review/pylinx-alerts.txt" "$RUNNER_TEMP/pylinx-mail/build/pylinx-alerts.txt"

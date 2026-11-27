@@ -15,21 +15,22 @@ def main():
         print("::error::Configure PYLINX_GMAIL_ADDRESS and PYLINX_GMAIL_APP_PASSWORD to receive build alerts")
         return 1
     run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-    report = Path(sys.argv[1])
-    details = report.read_text(encoding="utf-8")[:16_000] if report.is_file() else ""
+    reports = (Path(arg) for arg in sys.argv[1:])
+    details = "\n".join(report.read_text(encoding="utf-8") for report in reports if report.is_file())[:16_000]
+    review = os.environ.get("REVIEW_RESULT", "skipped")
     build = os.environ["BUILD_RESULT"]
     publish = os.environ["PUBLISH_RESULT"]
     if os.environ.get("TEST_EMAIL") == "true":
         status = "邮件通知测试"
-    elif "failure" in (build, publish):
-        status = "同步、构建或发布失败"
+    elif "failure" in (review, build, publish):
+        status = "同步、安全检查、构建或发布失败"
     else:
         status = "上游接入点发生变化"
     message = EmailMessage()
     message["From"] = address
     message["To"] = address
     message["Subject"] = f"[MAA-Meow pylinx171] {status}"
-    message.set_content(f"{status}\n构建 {build}，发布 {publish}\n{run}\n\n{details}")
+    message.set_content(f"{status}\n安全检查 {review}，构建 {build}，发布 {publish}\n{run}\n\n{details}")
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30, context=ssl.create_default_context()) as smtp:
             smtp.login(address, password)

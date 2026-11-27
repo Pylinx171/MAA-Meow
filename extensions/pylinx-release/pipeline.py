@@ -155,6 +155,7 @@ def prepare(args):
         "upstreamTag": stable,
         "core": core,
         "previousCore": index["resource"]["core"] if index else "v6.23.1",
+        "previousCoreCommit": index["resource"].get("coreCommit") if index else None,
         "versionName": version_name,
         "versionCode": code,
         "tag": f"pylinx-{stable}-{code}",
@@ -224,8 +225,6 @@ def package(args):
     plan["resourceVersion"] = version
     (args.out / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     shutil.copyfile(args.apk, args.out / "app-unsigned.apk")
-    if plan["sourceCommit"] != plan["baseCommit"]:
-        git("bundle", "create", str((args.out / "source.bundle").resolve()), CANDIDATE, f"^{plan['baseCommit']}")
 
 
 def make_index(plan, apk, resource):
@@ -249,6 +248,7 @@ def make_index(plan, apk, resource):
         },
         "resource": {
             "core": plan["core"],
+            "coreCommit": plan["coreCommit"],
             "version": plan["resourceVersion"],
             "asset": asset(resource),
         },
@@ -265,7 +265,12 @@ def commit_index(index, previous):
 
 
 def publish(args):
-    plan = json.loads((args.artifacts / "plan.json").read_text())
+    plan = json.loads((args.approved / "plan.json").read_text())
+    built_plan = json.loads((args.artifacts / "plan.json").read_text())
+    resource_version = built_plan.pop("resourceVersion")
+    if built_plan != plan or not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}", resource_version):
+        raise ValueError("Build artifact does not match the reviewed release plan")
+    plan["resourceVersion"] = resource_version
     apk = args.apk
     resource = args.artifacts / "MaaResource.zip"
     check_apk(apk, args.build_tools, plan)
@@ -282,7 +287,7 @@ def publish(args):
         raise ValueError("Fork changed during the build; rerun against its latest commit")
     candidate = plan["baseCommit"]
     if plan["sourceCommit"] != plan["baseCommit"]:
-        git("fetch", "--no-tags", str((args.artifacts / "source.bundle").resolve()),
+        git("fetch", "--no-tags", str((args.approved / "source.bundle").resolve()),
             f"refs/heads/{CANDIDATE}:refs/pylinx/candidate")
         candidate = git("rev-parse", "refs/pylinx/candidate")
     if candidate != plan["sourceCommit"]:
@@ -338,6 +343,7 @@ def main():
 
     sub = commands.add_parser("publish")
     sub.add_argument("--artifacts", type=Path, required=True)
+    sub.add_argument("--approved", type=Path, required=True)
     sub.add_argument("--apk", type=Path, required=True)
     sub.add_argument("--build-tools", type=Path, required=True)
     sub.set_defaults(function=publish)
