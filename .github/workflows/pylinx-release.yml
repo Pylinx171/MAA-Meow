@@ -76,6 +76,8 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         if: steps.plan.outputs.build == 'true'
+        with:
+          packages: platform-tools
 
       - name: Install the Android build toolchain
         if: steps.plan.outputs.build == 'true'
@@ -179,6 +181,8 @@ jobs:
           java-version: '25'
 
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - run: sdkmanager --install 'build-tools;37.0.0'
 
