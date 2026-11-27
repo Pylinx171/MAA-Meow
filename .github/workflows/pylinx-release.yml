@@ -74,14 +74,14 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         if: steps.plan.outputs.build == 'true'
         with:
           packages: platform-tools
 
       - name: Install the Android build toolchain
         if: steps.plan.outputs.build == 'true'
-        run: sdkmanager --install 'platforms;android-37' 'build-tools;37.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
+        run: sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
 
       - name: Check the upstream MaaCore integration points
         if: steps.plan.outputs.build == 'true'
@@ -180,7 +180,7 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
 
