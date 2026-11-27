@@ -1,0 +1,5 @@
+<resources>
+    <string name="panel_wakeup_ignore_startup_warnings">忽略启动警告</string>
+    <string name="runlog_reuse_running_game">游戏已运行，继续使用当前游戏</string>
+    <string name="runlog_running_game_show_failed">无法将正在运行的游戏切换到目标屏幕</string>
+</resources>

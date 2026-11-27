@@ -1,0 +1,5 @@
+<resources>
+    <string name="pylinx_update_source">Pylinx171 GitHub releases</string>
+    <string name="pylinx_update_index_changed">The available release changed. Check for updates again.</string>
+    <string name="pylinx_update_checksum_failed">The downloaded file failed SHA-256 verification. Download it again.</string>
+</resources>

@@ -1,0 +1,5 @@
+<resources>
+    <string name="pylinx_update_source">Pylinx171 GitHub 发布</string>
+    <string name="pylinx_update_index_changed">更新版本已变化，请重新检查更新</string>
+    <string name="pylinx_update_checksum_failed">下载文件的 SHA-256 校验失败，请重新下载</string>
+</resources>

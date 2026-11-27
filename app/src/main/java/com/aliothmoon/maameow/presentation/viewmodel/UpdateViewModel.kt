@@ -55,7 +55,11 @@ class UpdateViewModel(
     private val _currentResourceVersion = MutableStateFlow("")
     val currentResourceVersion: StateFlow<String> = _currentResourceVersion.asStateFlow()
 
-    val updateSource: StateFlow<UpdateSource> = appSettingsManager.updateSource
+    val updateSource: StateFlow<UpdateSource> = if (BuildConfig.PYLINX_FORK_BUILD) {
+        MutableStateFlow(UpdateSource.GITHUB).asStateFlow()
+    } else {
+        appSettingsManager.updateSource
+    }
 
     val mirrorChyanCdk: StateFlow<String> = appSettingsManager.mirrorChyanCdk
 
@@ -267,7 +271,7 @@ class UpdateViewModel(
         }
         viewModelScope.launch {
             _appChecking.value = true
-            Timber.i("检查 App 更新 (MirrorChyan)")
+            Timber.i("检查 App 更新")
             val result = updateService.checkAppUpdate(channel = updateChannel.value)
             saveAppChangelog((result as? UpdateCheckResult.Available)?.info)
             _appCheckResult.value = result

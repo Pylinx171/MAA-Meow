@@ -1,0 +1,245 @@
+name: Pylinx171 auto release
+
+on:
+  schedule:
+    - cron: '19 1 * * *'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested build
+        type: boolean
+        default: false
+      test_email:
+        description: Send a test alert only
+        type: boolean
+        default: false
+      upstream_tag:
+        description: Override the stable upstream tag for this run
+        type: string
+      maa_core:
+        description: Override the MaaCore tag when upstream declares it differently
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pylinx171-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Pylinx171/MAA-Meow' && !inputs.test_email
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      built: ${{ steps.plan.outputs.build }}
+      warned: ${{ steps.summary.outputs.warned }}
+    steps:
+      - name: Set temporary paths
+        run: |
+          {
+            echo "PYLINX_ALERT_FILE=$RUNNER_TEMP/pylinx-alerts.txt"
+            echo "PLAN=$RUNNER_TEMP/pylinx-plan.json"
+            echo "CORE_TREE=$RUNNER_TEMP/pylinx-core"
+            echo "OUT=$RUNNER_TEMP/pylinx-build"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: pylinx171
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Resolve upstream and merge a candidate
+        id: plan
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          MAA_CORE: ${{ inputs.maa_core }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          args=(--plan "$PLAN")
+          if [[ -n "$UPSTREAM_TAG" ]]; then args+=(--upstream-tag "$UPSTREAM_TAG"); fi
+          if [[ -n "$MAA_CORE" ]]; then args+=(--maa-core "$MAA_CORE"); fi
+          if [[ "$MANUAL" == "true" ]]; then args+=(--force); fi
+          python3 extensions/pylinx-release/pipeline.py prepare "${args[@]}"
+
+      - uses: actions/setup-java@v5
+        if: steps.plan.outputs.build == 'true'
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: android-actions/setup-android@v3
+        if: steps.plan.outputs.build == 'true'
+
+      - name: Install the Android build toolchain
+        if: steps.plan.outputs.build == 'true'
+        run: sdkmanager --install 'platforms;android-37' 'build-tools;37.0.0' 'ndk;29.0.14206865' 'cmake;3.22.1'
+
+      - name: Check the upstream MaaCore integration points
+        if: steps.plan.outputs.build == 'true'
+        env:
+          CORE: ${{ steps.plan.outputs.core }}
+        run: |
+          git clone --depth 1 --branch "$CORE" https://github.com/MaaAssistantArknights/MaaAssistantArknights.git "$CORE_TREE"
+          git -C "$CORE_TREE" submodule update --init --depth 1 src/MaaUtils
+          python3 extensions/pylinx-release/pipeline.py core-warnings --plan "$PLAN" --core-tree "$CORE_TREE"
+          if ! python3 extensions/clue-reciprocity/stage.py --app-tree "$PWD" --core-tree "$CORE_TREE" --ci-checkout; then
+            echo '::error title=Extension integration::An upstream App or MaaCore integration point is missing or ambiguous'
+            exit 1
+          fi
+
+      - name: Stage and compile the custom Android MaaCore
+        if: steps.plan.outputs.build == 'true'
+        env:
+          CORE: ${{ steps.plan.outputs.core }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # stage.py applies the planned hooks only to this disposable runner checkout.
+          python3 extensions/clue-reciprocity/stage.py --app-tree "$PWD" --core-tree "$CORE_TREE" --apply --ci-checkout
+          python3 scripts/setup_maa_core.py --tag "$CORE" --abi arm64-v8a
+          (cd "$CORE_TREE" && python3 tools/maadeps-download.py arm64-android)
+          cmake -S "$CORE_TREE" -B "$CORE_TREE/build" --preset android-publish-arm64 \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/29.0.14206865/build/cmake/android.toolchain.cmake" \
+            -DMAA_HASH_VERSION="$CORE"
+          cmake --build "$CORE_TREE/build" --target MaaCore --parallel 4
+          python3 extensions/clue-reciprocity/stage.py --app-tree "$PWD" --ci-checkout \
+            --install-core arm64-v8a "$CORE_TREE/build/bin/libMaaCore.so" --apply
+
+      - name: Run the native and Android regression tests
+        if: steps.plan.outputs.build == 'true'
+        env:
+          VERSION_NAME: ${{ steps.plan.outputs.version_name }}
+          VERSION_CODE: ${{ steps.plan.outputs.version_code }}
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Werror extensions/clue-reciprocity/check_policy.cpp -o "$RUNNER_TEMP/check-policy"
+          "$RUNNER_TEMP/check-policy"
+          bash gradlew :app:testDebugUnitTest \
+            --tests '*PrepareTaskStartUseCaseTest' --tests '*CheckGameReadinessUseCaseTest' \
+            --tests '*WakeUpGameReuseTest' --tests '*PylinxUpdatesTest' \
+            -Pmaa.abi=arm64-v8a -Ppylinx.release=true \
+            -Ppylinx.versionName="$VERSION_NAME" -Ppylinx.versionCode="$VERSION_CODE"
+
+      - name: Build and verify the fork APK and resource ZIP
+        if: steps.plan.outputs.build == 'true'
+        env:
+          VERSION_NAME: ${{ steps.plan.outputs.version_name }}
+          VERSION_CODE: ${{ steps.plan.outputs.version_code }}
+        run: |
+          bash gradlew :app:assembleRelease -Pmaa.abi=arm64-v8a -Ppylinx.release=true \
+            -Ppylinx.versionName="$VERSION_NAME" -Ppylinx.versionCode="$VERSION_CODE"
+          python3 extensions/pylinx-release/pipeline.py package --plan "$PLAN" \
+            --apk app/build/outputs/apk/release/app-release-unsigned.apk \
+            --resource app/src/main/assets/MaaSync/MaaResource \
+            --out "$OUT" --build-tools "$ANDROID_HOME/build-tools/37.0.0"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.plan.outputs.build == 'true'
+        with:
+          name: pylinx-build
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+
+      - name: Record warnings
+        id: summary
+        if: always()
+        run: |
+          if [[ -s "$PYLINX_ALERT_FILE" ]]; then
+            echo 'warned=true' >> "$GITHUB_OUTPUT"
+            cat "$PYLINX_ALERT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.summary.outputs.warned == 'true'
+        with:
+          name: pylinx-alerts
+          path: ${{ env.PYLINX_ALERT_FILE }}
+
+  publish:
+    if: needs.build.outputs.built == 'true' && (github.event_name == 'schedule' || inputs.publish)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: pylinx171
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: android-actions/setup-android@v3
+
+      - run: sdkmanager --install 'build-tools;37.0.0'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: pylinx-build
+          path: ${{ runner.temp }}/pylinx-build
+
+      - name: Sign the tested APK
+        env:
+          KEYSTORE_B64: ${{ secrets.PYLINX_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.PYLINX_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.PYLINX_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PYLINX_KEY_ALIAS }}
+        run: |
+          if [[ -z "$KEYSTORE_B64" || -z "$KEYSTORE_PASSWORD" || -z "$KEY_PASSWORD" || -z "$KEY_ALIAS" ]]; then
+            echo '::error::Configure the four Pylinx signing Secrets before enabling publication'
+            exit 1
+          fi
+          umask 077
+          key="$RUNNER_TEMP/pylinx-release.jks"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$key"
+          tools="$ANDROID_HOME/build-tools/37.0.0"
+          "$tools/zipalign" -f -P 16 4 "$RUNNER_TEMP/pylinx-build/app-unsigned.apk" "$RUNNER_TEMP/pylinx-aligned.apk"
+          "$tools/apksigner" sign --ks "$key" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --out "$RUNNER_TEMP/MaaMeow-pylinx171-arm64-v8a.apk" "$RUNNER_TEMP/pylinx-aligned.apk"
+
+      - name: Publish release assets, then switch the update index
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 extensions/pylinx-release/pipeline.py publish \
+            --artifacts "$RUNNER_TEMP/pylinx-build" --apk "$RUNNER_TEMP/MaaMeow-pylinx171-arm64-v8a.apk" \
+            --build-tools "$ANDROID_HOME/build-tools/37.0.0"
+
+  notify:
+    needs: [build, publish]
+    if: >-
+      always() && github.repository == 'Pylinx171/MAA-Meow' &&
+      (inputs.test_email || needs.build.outputs.warned == 'true' ||
+       needs.build.result == 'failure' || needs.publish.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        if: needs.build.outputs.warned == 'true'
+        with:
+          name: pylinx-alerts
+          path: ${{ runner.temp }}/pylinx-mail
+
+      - name: Send the Gmail alert
+        env:
+          GMAIL_ADDRESS: ${{ secrets.PYLINX_GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.PYLINX_GMAIL_APP_PASSWORD }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          TEST_EMAIL: ${{ inputs.test_email }}
+        run: python3 extensions/pylinx-release/notify.py "$RUNNER_TEMP/pylinx-mail/pylinx-alerts.txt"

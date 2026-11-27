@@ -20,6 +20,8 @@ val localProperties = Properties().apply {
     }
 }
 
+val pylinxBuild = providers.gradleProperty("pylinx.release").map(String::toBoolean).orElse(false).get()
+
 val gitVersionCode: Int by lazy {
     providers.exec {
         commandLine("git", "rev-list", "--count", "HEAD")
@@ -76,11 +78,12 @@ android {
 
 
     defaultConfig {
-        applicationId = "com.aliothmoon.maameow"
+        applicationId = if (pylinxBuild) "com.aliothmoon.maameow.pylinx171" else "com.aliothmoon.maameow"
         minSdk = 28
         targetSdk = 36
-        versionCode = gitVersionCode
-        versionName = gitVersionName
+        versionCode = providers.gradleProperty("pylinx.versionCode").orNull?.toInt() ?: gitVersionCode
+        versionName = providers.gradleProperty("pylinx.versionName").orNull ?: gitVersionName
+        buildConfigField("boolean", "PYLINX_FORK_BUILD", pylinxBuild.toString())
         println("Build version: versionCode=$versionCode, versionName=$versionName")
         ndkVersion = "29.0.14206865"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

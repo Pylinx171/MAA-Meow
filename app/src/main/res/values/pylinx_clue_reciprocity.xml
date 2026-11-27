@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pylinx_clue_reciprocity_title">礼尚往来</string>
+    <string name="pylinx_clue_reciprocity_description">只上墙好友赠送的线索。自有线索优先回赠给缺少它的好友。</string>
+    <string name="pylinx_clue_reciprocity_unavailable">此功能需要包含回赠流程的 MaaCore 构建。</string>
+    <string name="pylinx_clue_reciprocity_unsupported_client">当前仅识别国服简体中文的会客室界面。</string>
+</resources>

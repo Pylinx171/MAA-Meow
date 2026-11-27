@@ -36,8 +36,16 @@ class PrepareTaskStartUseCase(
             return TaskStartDecision.Ready(plan)
         }
 
+        val readinessContext = if (context.mode == TaskStartMode.MANUAL && chain.any {
+                it.enabled && (it.config as? WakeUpConfig)?.ignoreStartupWarnings == true
+            }
+        ) {
+            context.copy(acknowledgements = context.acknowledgements + TaskStartAcknowledgement.entries)
+        } else {
+            context
+        }
         return when (val readiness =
-            checkGameReadiness(plan.clientType, plan.launchesGame, context)) {
+            checkGameReadiness(plan.clientType, plan.launchesGame, readinessContext)) {
             is GameReadiness.Ready ->
                 TaskStartDecision.Ready(plan.copy(gameAliveBeforeStart = readiness.gameAliveBeforeStart))
 

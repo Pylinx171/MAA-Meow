@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pylinx_clue_reciprocity_title">Reciprocate clue gifts</string>
+    <string name="pylinx_clue_reciprocity_description">Pin gifts from friends and send your own clues to friends who need them, starting with past senders.</string>
+    <string name="pylinx_clue_reciprocity_unavailable">This option requires a MaaCore build with clue reciprocity support.</string>
+    <string name="pylinx_clue_reciprocity_unsupported_client">This option recognizes only the Simplified Chinese reception room interface.</string>
+</resources>
