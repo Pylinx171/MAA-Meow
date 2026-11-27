@@ -138,7 +138,7 @@ def prepare(args):
                       stdout=subprocess.DEVNULL).returncode == 0:
         if workflow_paths:
             git("restore", "--source", base, "--staged", "--worktree", ":(top).github/workflows/")
-        git(*author, "commit", "-m", f"Merge upstream {stable}", capture=False)
+        git(*author, "commit", "-m", f"chore(upstream): 合并 MAA-Meow {stable}", capture=False)
 
     tags = remote_refs(args.fork, "refs/tags/pylinx-v*")
     codes = [
@@ -261,7 +261,7 @@ def commit_index(index, previous):
     tree = git("mktree", input=f"100644 blob {blob}\tupdate.json\n")
     parents = ["-p", git("rev-parse", "refs/pylinx/update-index")] if previous else []
     return git("-c", "user.name=Pylinx release bot", "-c", "user.email=actions@users.noreply.github.com",
-               "commit-tree", tree, *parents, "-m", f"Publish Android build {index['app']['versionCode']}")
+               "commit-tree", tree, *parents, "-m", f"chore(release): 更新 Android 构建 {index['app']['versionCode']} 的更新清单")
 
 
 def publish(args):
