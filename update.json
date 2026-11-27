@@ -1,24 +1,25 @@
 {
   "schema": 1,
-  "sourceCommit": "aef2bd72b49a4ddd02ffd5b2c93a43f29dbe4eda",
+  "sourceCommit": "8c0d411f08504b477779c73426d9a83f33eff93a",
   "upstreamCommit": "e8ca1a82dce9785aef9159071694f7c7842c04ed",
   "upstreamTag": "v0.28.2",
   "app": {
     "versionName": "0.28.2",
-    "versionCode": 1012,
+    "versionCode": 1013,
     "abi": "arm64-v8a",
     "asset": {
-      "url": "https://github.com/Pylinx171/MAA-Meow/releases/download/pylinx-v0.28.2-1012/MaaMeow-pylinx171-arm64-v8a.apk",
-      "sha256": "954fc39d180ac1408c713b5035543dfee79f338cd96d5fd25dd2128a8640bb20"
+      "url": "https://github.com/Pylinx171/MAA-Meow/releases/download/pylinx-v0.28.2-1013/MaaMeow-pylinx171-arm64-v8a.apk",
+      "sha256": "5cb0d8faff8ad5b4eb7372d1d83dd9e360a259801661c5ab67a58aab9d943154"
     },
     "releaseNote": "Upstream MaaMeow v0.28.2 · MaaCore v6.23.2 · Pylinx171"
   },
   "resource": {
     "core": "v6.23.2",
+    "coreCommit": "7980fa9260dd472e4c66098ba2366919986f1e25",
     "version": "2026-11-24 02:54:06.000",
     "asset": {
-      "url": "https://github.com/Pylinx171/MAA-Meow/releases/download/pylinx-v0.28.2-1012/MaaResource.zip",
-      "sha256": "efbd22ea8d334ac10d47146c1f2ae8064739e59e5e90ba07f8f928bf30503270"
+      "url": "https://github.com/Pylinx171/MAA-Meow/releases/download/pylinx-v0.28.2-1013/MaaResource.zip",
+      "sha256": "402e25f55c07697ab0199efb5eec5e3d73bbb942e14c71e434b10869a885c359"
     }
   }
 }
