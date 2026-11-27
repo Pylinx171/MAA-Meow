@@ -1,0 +1,5 @@
+<resources>
+    <string name="panel_wakeup_ignore_startup_warnings">Ignore Startup Warnings</string>
+    <string name="runlog_reuse_running_game">The game is already running. Continuing with the current session.</string>
+    <string name="runlog_running_game_show_failed">Could not bring the running game to the target display.</string>
+</resources>

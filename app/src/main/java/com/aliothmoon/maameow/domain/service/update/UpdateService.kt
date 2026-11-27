@@ -35,6 +35,8 @@ import com.aliothmoon.maameow.domain.service.update.checker.AppVersionChecker
 import com.aliothmoon.maameow.domain.service.update.checker.ResourceVersionChecker
 import com.aliothmoon.maameow.domain.service.update.resolver.AppDownloadUrlResolver
 import com.aliothmoon.maameow.domain.service.update.resolver.ResourceDownloadUrlResolver
+import com.aliothmoon.maameow.extension.PylinxUpdates
+import com.aliothmoon.maameow.extension.UpdateAsset
 import com.aliothmoon.maameow.remote.CoreDataDir
 import com.aliothmoon.maameow.utils.i18n.LocalizedException
 import com.aliothmoon.maameow.utils.i18n.resolve
@@ -75,6 +77,8 @@ class UpdateService(
     private val resourceInitService: ResourceInitService,
     private val coreFiles: CoreFilesGate,
 ) {
+    private val fork = if (BuildConfig.PYLINX_FORK_BUILD) PylinxUpdates(httpClient) else null
+
     private val appDownloadResolvers: Map<UpdateSource, AppDownloadUrlResolver> = mapOf(
         UpdateSource.MIRROR_CHYAN to MirrorChyanAppDownloadUrlResolver(
             apiClient,
@@ -102,7 +106,7 @@ class UpdateService(
     val appProcessState: StateFlow<UpdateProcessState> = _appProcessState.asStateFlow()
 
     suspend fun checkAppUpdate(channel: UpdateChannel = UpdateChannel.STABLE): UpdateCheckResult {
-        return appVersionChecker.check(BuildConfig.VERSION_NAME, channel)
+        return fork?.checkApp() ?: appVersionChecker.check(BuildConfig.VERSION_NAME, channel)
     }
 
     suspend fun downloadApp(
@@ -138,7 +142,7 @@ class UpdateService(
                     )
                 )
 
-            val url = resolver.resolve(version, channel).getOrElse { e ->
+            val asset = (fork?.appAsset(version) ?: resolver.resolve(version, channel).map { UpdateAsset(it) }).getOrElse { e ->
                 // 兜底：解析器吞了取消也不按失败处理
                 currentCoroutineContext().ensureActive()
                 val error = mapToUpdateError(e)
@@ -150,8 +154,8 @@ class UpdateService(
                 }
                 return Result.failure(e)
             }
-            Timber.i("downloadApp resolved URL: host=%s", safeHost(url))
-            val result = downloadAndInstallApp(url, version)
+            Timber.i("downloadApp resolved URL: host=%s", safeHost(asset.url))
+            val result = downloadAndInstallApp(asset, version)
             achievementRepository.report {
                 event =
                     if (result.isSuccess) AchievementEvents.UPDATE_COMPLETED else AchievementEvents.UPDATE_FAILED
@@ -181,16 +185,16 @@ class UpdateService(
         _appProcessState.value = UpdateProcessState.Idle
     }
 
-    private suspend fun downloadAndInstallApp(url: String, version: String): Result<Unit> {
+    private suspend fun downloadAndInstallApp(asset: UpdateAsset, version: String): Result<Unit> {
         val cached = appDownloader.getCachedApk(version)
-        if (cached != null) {
+        if (cached != null && asset.verifies(cached)) {
             Timber.i("APK already cached: ${cached.name}, skipping download")
             return doInstallApp(cached)
         }
 
         appDownloader.cleanOldApks(version)
 
-        val downloadResult = appDownloader.downloadToTempFile(url, version) { progress ->
+        val downloadResult = appDownloader.downloadToTempFile(asset.url, version) { progress ->
             _appProcessState.value = UpdateProcessState.Downloading(
                 progress = progress.progress,
                 speed = progress.speed,
@@ -207,6 +211,10 @@ class UpdateService(
 
         // 卡在「下完了还没装」的缝里被取消，别再弹安装界面
         currentCoroutineContext().ensureActive()
+        if (!asset.verifies(apkFile)) {
+            apkFile.delete()
+            return failApp(UpdateError.UnknownError(uiTextOf(R.string.pylinx_update_checksum_failed)))
+        }
 
         return doInstallApp(apkFile)
     }
@@ -267,7 +275,7 @@ class UpdateService(
     val resourceProcessState: StateFlow<UpdateProcessState> = _resourceProcessState.asStateFlow()
 
     suspend fun checkResourceUpdate(currentVersion: String): UpdateCheckResult {
-        return resourceVersionChecker.check(currentVersion)
+        return fork?.checkResources(currentVersion) ?: resourceVersionChecker.check(currentVersion)
     }
 
     suspend fun downloadResource(
@@ -300,7 +308,7 @@ class UpdateService(
                     )
                 )
 
-            val url = resolver.resolve(currentVersion).getOrElse { e ->
+            val asset = (fork?.resourceAsset(currentVersion) ?: resolver.resolve(currentVersion).map { UpdateAsset(it) }).getOrElse { e ->
                 currentCoroutineContext().ensureActive()
                 val error = mapToUpdateError(e)
                 _resourceProcessState.value = UpdateProcessState.Failed(error)
@@ -316,8 +324,17 @@ class UpdateService(
                 }
                 return Result.failure(e)
             }
-            Timber.i("downloadResource resolved URL: host=%s", safeHost(url))
-            val zip = downloadResourceZip(url).getOrElse { return reportResource(source, Result.failure(it)) }
+            Timber.i("downloadResource resolved URL: host=%s", safeHost(asset.url))
+            val zip = downloadResourceZip(asset.url).getOrElse { return reportResource(source, Result.failure(it)) }
+            try {
+                if (!asset.verifies(zip)) {
+                    zip.delete()
+                    return reportResource(source, failResource(UpdateError.UnknownError(uiTextOf(R.string.pylinx_update_checksum_failed))))
+                }
+            } catch (e: CancellationException) {
+                zip.delete()
+                throw e
+            }
             resourceDownloadJob = null
             handedOff = true
             return applyScope.async {

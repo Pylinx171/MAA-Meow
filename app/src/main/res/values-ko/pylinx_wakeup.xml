@@ -1,0 +1,5 @@
+<resources>
+    <string name="panel_wakeup_ignore_startup_warnings">시작 경고 무시</string>
+    <string name="runlog_reuse_running_game">게임이 이미 실행 중입니다. 현재 게임을 계속 사용합니다.</string>
+    <string name="runlog_running_game_show_failed">실행 중인 게임을 대상 화면으로 이동하지 못했습니다.</string>
+</resources>

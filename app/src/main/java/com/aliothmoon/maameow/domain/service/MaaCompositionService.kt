@@ -14,6 +14,7 @@ import com.aliothmoon.maameow.constant.Packages
 import com.aliothmoon.maameow.data.model.LogLevel
 import com.aliothmoon.maameow.data.preferences.AppSettingsManager
 import com.aliothmoon.maameow.data.preferences.TaskChainState
+import com.aliothmoon.maameow.domain.launch.prepareRunningWakeUpGame
 import com.aliothmoon.maameow.domain.models.RemoteBackend
 import com.aliothmoon.maameow.domain.models.RunMode
 import com.aliothmoon.maameow.domain.models.VirtualDisplayBackend
@@ -872,8 +873,24 @@ class MaaCompositionService(
                         clientType,
                         displayBackend,
                     )?.let { return@useRemoteService it }
+                    val gamePackage = Packages[clientType]
+                    val tasksToStart = if (kind == RunKind.CHAIN && gamePackage != null) {
+                        prepareRunningWakeUpGame(tasks, service, gamePackage, mode) {
+                            telemetry.onRemoteCallStuck(it.call, it.threadDump)
+                        } ?: return@useRemoteService failStart(
+                            context.getString(R.string.runlog_running_game_show_failed), "GAME_DISPLAY_ERROR",
+                            StartResult.StartError,
+                        )
+                    } else {
+                        tasks
+                    }
+                    if (tasksToStart !== tasks) {
+                        sessionLogger.appendAndWait(
+                            context.getString(R.string.runlog_reuse_running_game), LogLevel.INFO,
+                        )
+                    }
                     val result = appendTasksAndStart(
-                        maa, tasks, fallbacks, successMessage, mode, limitRunDuration,
+                        maa, tasksToStart, fallbacks, successMessage, mode, limitRunDuration,
                     )
                     if (result is StartResult.Success) {
                         taskChainState.saveLastUsedClientType(clientType)

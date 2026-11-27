@@ -34,6 +34,7 @@ class PrepareTaskStartUseCaseTest {
 
     private val taskChainState = mockk<TaskChainState> {
         every { clientType } returns "Official"
+        every { profileId } returns MutableStateFlow("test")
     }
     private val resourceDataManager = mockk<ResourceDataManager>(relaxed = true)
     private val operBoxViaYituliu = MutableStateFlow(false)
@@ -61,14 +62,19 @@ class PrepareTaskStartUseCaseTest {
         metadataGate = mockk { coEvery { awaitCurrent(any()) } returns true },
     )
 
-    private fun useCase(aliveStatus: Int) = PrepareTaskStartUseCase(
+    private fun useCase(
+        aliveStatus: Int,
+        eyeProtection: Boolean = false,
+        onBackgroundDisplay: Boolean? = null,
+    ) = PrepareTaskStartUseCase(
         analyzeTaskChainUseCase = analyzeTaskChainUseCase,
         checkGameReadiness = CheckGameReadinessUseCase(
-            appAliveChecker = FakeAppAliveChecker(aliveStatus),
+            appAliveChecker = FakeAppAliveChecker(aliveStatus, onBackgroundDisplay),
             appSettings = mockk<AppSettingsManager> {
                 every { runMode } returns MutableStateFlow(RunMode.BACKGROUND)
             },
             achievementReporter = mockk<AchievementReporter>(relaxed = true),
+            isEyeProtectionEnabled = { eyeProtection },
         ),
     )
 
@@ -185,6 +191,35 @@ class PrepareTaskStartUseCaseTest {
     }
 
     @Test
+    fun enabledWakeUpCanSkipTheEyeProtectionDialog() = runBlocking {
+        val prepare = useCase(AppAliveStatus.ALIVE, eyeProtection = true)
+        val context = TaskStartContext(mode = TaskStartMode.MANUAL)
+        val wakeUp = TaskChainNode(name = "开始唤醒", enabled = true, config = WakeUpConfig())
+
+        assertEquals(
+            TaskStartDecision.RequiresConfirmation(TaskStartAcknowledgement.EYE_PROTECTION_ENABLED),
+            prepare(listOf(wakeUp), context),
+        )
+        val configured = wakeUp.copy(config = WakeUpConfig(ignoreStartupWarnings = true))
+        assertTrue(prepare(listOf(configured), context) is TaskStartDecision.Ready)
+    }
+
+    @Test
+    fun ignoringWarningsKeepsBackgroundDisplayChecks() = runBlocking {
+        val prepare = useCase(AppAliveStatus.ALIVE, onBackgroundDisplay = false)
+        val wakeUp = TaskChainNode(
+            name = "开始唤醒",
+            enabled = true,
+            config = WakeUpConfig(startGameEnabled = false, ignoreStartupWarnings = true),
+        )
+
+        assertEquals(
+            TaskStartDecision.Blocked(TaskStartDecisionReason.GAME_NOT_ON_BACKGROUND_DISPLAY),
+            prepare(listOf(wakeUp), TaskStartContext(mode = TaskStartMode.MANUAL)),
+        )
+    }
+
+    @Test
     fun runFromNode_skippingEnabledWakeUp_saysSkippedInsteadOfNotEnabled() = runBlocking {
         val wakeUp = TaskChainNode(
             name = "开始唤醒",
@@ -227,9 +262,12 @@ class PrepareTaskStartUseCaseTest {
         assertEquals(listOf(PlanSideTask.OPER_BOX_YITULIU), plan.sideTasks)
     }
 
-    private class FakeAppAliveChecker(private val status: Int) : AppAliveChecker {
+    private class FakeAppAliveChecker(
+        private val status: Int,
+        private val onBackgroundDisplay: Boolean?,
+    ) : AppAliveChecker {
         override suspend fun isAppAlive(packageName: String): Int = status
-        override suspend fun isAppOnBackgroundDisplay(packageName: String): Boolean? = null
+        override suspend fun isAppOnBackgroundDisplay(packageName: String): Boolean? = onBackgroundDisplay
     }
 
 }

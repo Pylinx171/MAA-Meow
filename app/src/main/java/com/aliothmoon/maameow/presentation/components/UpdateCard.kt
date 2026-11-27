@@ -56,6 +56,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aliothmoon.maameow.BuildConfig
 import com.aliothmoon.maameow.R
 import com.aliothmoon.maameow.data.api.MirrorChyanCdkStatus
 import com.aliothmoon.maameow.data.model.LogColorRole
@@ -63,6 +64,7 @@ import com.aliothmoon.maameow.data.model.update.UpdateCheckResult
 import com.aliothmoon.maameow.data.model.update.UpdateInfo
 import com.aliothmoon.maameow.data.model.update.UpdateProcessState
 import com.aliothmoon.maameow.data.model.update.UpdateSource
+import com.aliothmoon.maameow.extension.PylinxUpdates
 import com.aliothmoon.maameow.presentation.components.iconClickable
 import com.aliothmoon.maameow.presentation.viewmodel.UpdateViewModel
 import com.aliothmoon.maameow.theme.MaaAnimatedVisibility
@@ -399,17 +401,23 @@ fun UpdateCard(
                     color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
 
-                UpdateSourceButtonGroup(
-                    selectedSource = updateSource,
-                    onSourceSelected = { source ->
-                        if (anyDownloading && source != updateSource) {
-                            pendingSwitchSource = source
-                        } else {
-                            viewModel.setUpdateSource(source)
-                        }
-                    },
-                    onInfoClick = { showInfoSource = it }
-                )
+                if (BuildConfig.PYLINX_FORK_BUILD) {
+                    TextButton(onClick = { Misc.openUriSafely(context, PylinxUpdates.RELEASES_URL) }) {
+                        Text(stringResource(R.string.pylinx_update_source))
+                    }
+                } else {
+                    UpdateSourceButtonGroup(
+                        selectedSource = updateSource,
+                        onSourceSelected = { source ->
+                            if (anyDownloading && source != updateSource) {
+                                pendingSwitchSource = source
+                            } else {
+                                viewModel.setUpdateSource(source)
+                            }
+                        },
+                        onInfoClick = { showInfoSource = it }
+                    )
+                }
             }
 
             // 更新源说明弹窗

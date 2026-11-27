@@ -45,7 +45,9 @@ data class WakeUpConfig(
      *
      * 仅 [ACCOUNT_SWITCH_CLIENT_TYPES] 内的客户端生效，其他服将忽略该字段
      */
-    val accountName: String = ""
+    val accountName: String = "",
+
+    val ignoreStartupWarnings: Boolean = false,
 ) : TaskParamProvider {
     companion object {
         /**

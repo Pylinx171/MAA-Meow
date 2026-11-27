@@ -56,17 +56,17 @@ class CheckGameReadinessUseCase(
         val runMode = appSettings.runMode.value
         val aliveStatus = appAliveChecker.isAppAlive(packageName)
 
-        // 2) 会主动拉起游戏 / 前台模式 / 已确认「未运行」→ 跳过存活检查
-        if (launchesGame
-            || runMode == RunMode.FOREGROUND
-            || context.acknowledgements.contains(TaskStartAcknowledgement.GAME_NOT_RUNNING_WITHOUT_WAKE_UP)
-        ) {
+        // 2) 会主动拉起游戏 / 前台模式 → 跳过存活检查
+        if (launchesGame || runMode == RunMode.FOREGROUND) {
             return checkDeviceWarningsOrReady(context, gameAliveBeforeStart = aliveStatus == AppAliveStatus.ALIVE)
         }
 
         // 3) 存活检查
         return when (aliveStatus) {
             AppAliveStatus.DEAD -> {
+                if (TaskStartAcknowledgement.GAME_NOT_RUNNING_WITHOUT_WAKE_UP in context.acknowledgements) {
+                    return checkDeviceWarningsOrReady(context, gameAliveBeforeStart = false)
+                }
                 achievementReporter.reportTaskStartBlocked(
                     TaskStartDecisionReason.GAME_NOT_RUNNING_WITHOUT_WAKE_UP.name
                 )

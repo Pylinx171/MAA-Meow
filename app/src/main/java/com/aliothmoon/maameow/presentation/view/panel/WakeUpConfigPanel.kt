@@ -98,5 +98,10 @@ fun WakeUpConfigPanel(
             onCheckedChange = { onConfigChange(config.copy(startGameEnabled = it)) },
             label = stringResource(R.string.panel_wakeup_launch_game)
         )
+        CheckBoxWithLabel(
+            checked = config.ignoreStartupWarnings,
+            onCheckedChange = { onConfigChange(config.copy(ignoreStartupWarnings = it)) },
+            label = stringResource(R.string.panel_wakeup_ignore_startup_warnings)
+        )
     }
 }
