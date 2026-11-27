@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from urllib.parse import quote
@@ -43,7 +44,7 @@ def run(*args, capture=True, **kwargs):
 
 
 def git(*args, **kwargs):
-    return run("git", *args, **kwargs).strip()
+    return (run("git", *args, **kwargs) or "").strip()
 
 
 def report(level, message):
@@ -172,7 +173,7 @@ def core_warnings(args):
     core = plan["core"]
     if previous == core:
         return
-    run("git", "-C", str(args.core_tree), "fetch", "--no-tags", "origin",
+    run("git", "-C", str(args.core_tree), "fetch", "--no-tags", "--depth", "1", "--no-recurse-submodules", "origin",
         f"+refs/tags/{previous}:refs/pylinx/previous", capture=False)
     paths = run("git", "-C", str(args.core_tree), "diff", "--name-only", "refs/pylinx/previous", "HEAD", "--", *CORE_HOOKS)
     for path in paths.splitlines():
@@ -222,7 +223,7 @@ def package(args):
                 archive.write(path, "resource/" + path.relative_to(args.resource).as_posix())
     plan["resourceVersion"] = version
     (args.out / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
-    (args.out / "app-unsigned.apk").write_bytes(args.apk.read_bytes())
+    shutil.copyfile(args.apk, args.out / "app-unsigned.apk")
     if plan["sourceCommit"] != plan["baseCommit"]:
         git("bundle", "create", str((args.out / "source.bundle").resolve()), CANDIDATE, f"^{plan['baseCommit']}")
 
