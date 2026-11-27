@@ -294,13 +294,18 @@ def publish(args):
     run("gh", "release", "create", tag, str(apk), str(resource), "--repo", FORK, "--verify-tag",
         "--draft", "--title", f"Pylinx171 {plan['versionName']} ({plan['versionCode']})",
         "--notes", index["app"]["releaseNote"], capture=False)
-    run("gh", "release", "edit", tag, "--repo", FORK, "--draft=false", "--latest", capture=False)
-    release = json.loads(run("gh", "api", f"repos/{FORK}/releases/tags/{tag}"))
+    release = json.loads(run(
+        "gh", "api", f"repos/{FORK}/releases?per_page=100", "--paginate",
+        "--jq", f".[] | select(.tag_name == {json.dumps(tag)})",
+    ))
+    if not release["draft"]:
+        raise ValueError(f"Expected {tag} to remain a draft during asset verification")
     assets = {asset["name"]: asset for asset in release["assets"]}
     for file, artifact in ((apk, index["app"]["asset"]), (resource, index["resource"]["asset"])):
         found = assets.get(file.name)
         if not found or found["state"] != "uploaded" or found["digest"] != f"sha256:{artifact['sha256']}":
             raise ValueError(f"GitHub did not verify the uploaded asset {file.name}")
+    run("gh", "release", "edit", tag, "--repo", FORK, "--draft=false", "--latest", capture=False)
     git("push", "origin", f"{index_commit}:refs/heads/{UPDATE_BRANCH}", capture=False)
     print(f"Published {tag} and updated {UPDATE_BRANCH}/update.json")
 
