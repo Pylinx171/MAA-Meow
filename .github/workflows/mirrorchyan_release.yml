@@ -9,6 +9,9 @@ on:
   release:
     types: [released]
 
+permissions:
+  contents: read
+
 jobs:
   mirrorchyan:
     runs-on: ubuntu-latest

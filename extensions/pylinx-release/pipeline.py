@@ -265,7 +265,7 @@ def commit_index(index, previous):
 
 
 def publish(args):
-    plan = json.loads((args.approved / "plan.json").read_text())
+    plan = json.loads(args.approved.read_text())
     built_plan = json.loads((args.artifacts / "plan.json").read_text())
     resource_version = built_plan.pop("resourceVersion")
     if built_plan != plan or not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}", resource_version):
@@ -287,8 +287,8 @@ def publish(args):
         raise ValueError("Fork changed during the build; rerun against its latest commit")
     candidate = plan["baseCommit"]
     if plan["sourceCommit"] != plan["baseCommit"]:
-        git("fetch", "--no-tags", str((args.approved / "source.bundle").resolve()),
-            f"refs/heads/{CANDIDATE}:refs/pylinx/candidate")
+        git("fetch", "--no-tags", "--no-recurse-submodules", "origin",
+            f"refs/heads/pylinx-review/{plan['sourceCommit']}:refs/pylinx/candidate")
         candidate = git("rev-parse", "refs/pylinx/candidate")
     if candidate != plan["sourceCommit"]:
         raise ValueError("Source bundle does not match the tested build")

@@ -44,6 +44,7 @@ jobs:
       version_name: ${{ steps.plan.outputs.version_name }}
       version_code: ${{ steps.plan.outputs.version_code }}
       reviewed_commit: ${{ steps.inspect.outputs.head }}
+      reviewed_plan: ${{ steps.inspect.outputs.plan }}
       warned: ${{ steps.summary.outputs.warned }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -109,6 +110,7 @@ jobs:
               git bundle create "$REVIEWED/source.bundle" pylinx-release-candidate "^$GITHUB_SHA"
             fi
             echo "head=$head" >> "$GITHUB_OUTPUT"
+            echo "plan=$(jq -c . "$REVIEWED/plan.json")" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Report the PR's required review status
@@ -149,7 +151,7 @@ jobs:
 
   record:
     needs: review
-    if: needs.review.outputs.build == 'true'
+    if: github.event_name != 'pull_request_target' && needs.review.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -173,7 +175,7 @@ jobs:
         run: |
           [[ "$REVIEW_HEAD" =~ ^[0-9a-f]{40}$ ]]
           if [[ "$REVIEW_HEAD" != "$GITHUB_SHA" ]]; then
-            git fetch --no-tags "$RUNNER_TEMP/pylinx-reviewed/source.bundle" refs/heads/pylinx-release-candidate
+            git fetch --no-tags --no-recurse-submodules "$RUNNER_TEMP/pylinx-reviewed/source.bundle" refs/heads/pylinx-release-candidate
             test "$(git rev-parse FETCH_HEAD)" = "$REVIEW_HEAD"
             git push origin "$REVIEW_HEAD:refs/heads/pylinx-review/$REVIEW_HEAD"
           fi
@@ -183,7 +185,7 @@ jobs:
 
   build:
     needs: [review, record]
-    if: needs.review.outputs.build == 'true'
+    if: github.event_name != 'pull_request_target' && needs.review.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -208,21 +210,17 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: pylinx-reviewed-source
-          path: ${{ runner.temp }}/pylinx-reviewed
-
       - name: Check out the reviewed source
         env:
           REVIEW_HEAD: ${{ needs.review.outputs.reviewed_commit }}
+          REVIEW_PLAN: ${{ needs.review.outputs.reviewed_plan }}
         run: |
-          reviewed="$RUNNER_TEMP/pylinx-reviewed"
-          cp "$reviewed/plan.json" "$PLAN"
+          [[ "$REVIEW_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          printf '%s\n' "$REVIEW_PLAN" > "$PLAN"
           test "$(jq -er .baseCommit "$PLAN")" = "$GITHUB_SHA"
           test "$(jq -er .sourceCommit "$PLAN")" = "$REVIEW_HEAD"
           if [[ "$REVIEW_HEAD" != "$GITHUB_SHA" ]]; then
-            git fetch --no-tags "$reviewed/source.bundle" refs/heads/pylinx-release-candidate
+            git fetch --no-tags --no-recurse-submodules origin "refs/heads/pylinx-review/$REVIEW_HEAD"
             test "$(git rev-parse FETCH_HEAD)" = "$REVIEW_HEAD"
             git checkout --detach "$REVIEW_HEAD"
           fi
@@ -343,11 +341,6 @@ jobs:
           name: pylinx-build
           path: ${{ runner.temp }}/pylinx-build
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: pylinx-reviewed-source
-          path: ${{ runner.temp }}/pylinx-reviewed
-
       - name: Sign the tested APK
         env:
           KEYSTORE_B64: ${{ secrets.PYLINX_KEYSTORE_B64 }}
@@ -372,10 +365,12 @@ jobs:
       - name: Publish release assets, then switch the update index
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_PLAN: ${{ needs.review.outputs.reviewed_plan }}
         run: |
+          printf '%s\n' "$REVIEW_PLAN" > "$RUNNER_TEMP/pylinx-reviewed.json"
           python3 extensions/pylinx-release/pipeline.py publish \
             --artifacts "$RUNNER_TEMP/pylinx-build" --apk "$RUNNER_TEMP/MaaMeow-pylinx171-arm64-v8a.apk" \
-            --approved "$RUNNER_TEMP/pylinx-reviewed" \
+            --approved "$RUNNER_TEMP/pylinx-reviewed.json" \
             --build-tools "$ANDROID_HOME/build-tools/37.0.0"
 
   notify:
